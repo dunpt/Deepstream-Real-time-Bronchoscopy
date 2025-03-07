@@ -37,35 +37,49 @@ from PIL import ImageDraw
 from PIL import ImageFont
 
 import numpy as np
+# np.set_printoptions(threshold=np.inf)
+
 from scipy import ndimage
 from scipy.ndimage import binary_fill_holes
 
 import os
 import os.path
 from os import path
+import random
 
 from threading import Thread
 from multiprocessing import Process
 
 from collections import deque, Counter
-
+import json
 # from playsound import playsound
 # import pygame
 
 import subprocess
+from datetime import datetime
+# import pytz
+
+# # Define Vietnam time zone
+# vietnam_tz = pytz.timezone('Asia/Ho_Chi_Minh')
 
 frame_count = {}
 saved_count = {}
 saved_count["stream_0"] = 0
 forward_count = {}
 forward_count["Vocal cords"]  = 0
-forward_count["Trachea"]  = 0
-forward_count["forward_bool"] = 0 #0
-forward_count["show_rate"] = 10
+forward_count["Trachea in"]  = 0
+forward_count["Trachea out"]  = 0
+forward_count["forward_bool"] = 0
+forward_count["show_rate"] = 122523452343
+forward_count["time_skip"] =  0
+forward_count["show_image"]  = 0
+forward_count["bool_image"] = 0
+forward_count["bubble_mask"] = []
 show_rate = 10
 sound_delay = {"count" : 1}
 
-mgp_queue = deque()
+mgp_queue_in = deque()
+mgp_queue_out = deque()
 ttkv_queue = deque()
 counts = {i: 0 for i in range(0, 7)}
 
@@ -93,241 +107,9 @@ def sigmoid(x):
 # detected_sound = pygame.mixer.Sound('/opt/nvidia/deepstream/deepstream-7.0/sources/apps/sample_apps/Deepstream/deepstream-esfpnet-rtsp-out/pip_sound.mp3')
 
 
-def pgie_src_pad_buffer_probe(pad,info,u_data):
-    frame_number=0
-    #Intiallizing object counter with 0.
-    obj_counter = {
-        PGIE_CLASS_ID_VEHICLE:0,
-        PGIE_CLASS_ID_PERSON:0,
-        PGIE_CLASS_ID_BICYCLE:0,
-        PGIE_CLASS_ID_ROADSIGN:0
-    }
-    num_rects=0
+	
 
-    gst_buffer = info.get_buffer()
-    if not gst_buffer:
-        print("Unable to get GstBuffer ")
-        return
-
-    batch_meta = pyds.gst_buffer_get_nvds_batch_meta(hash(gst_buffer))
-    l_frame = batch_meta.frame_meta_list
-
-
-    while l_frame is not None:
-        try:
-            frame_meta = pyds.NvDsFrameMeta.cast(l_frame.data)
-        except StopIteration:
-            break
-        
-        folder_name = stream_path.split('/')[0]
-        folder_path = f'/opt/nvidia/deepstream/deepstream-7.0/sources/apps/sample_apps/Deepstream/deepstream-esfpnet-rtsp-out/frames/{folder_name}/masks'
-        if not os.path.exists(folder_path):
-            os.makedirs(folder_path)
-
-        frame_number=frame_meta.frame_num
-        num_rects = frame_meta.num_obj_meta
-        l_obj=frame_meta.obj_meta_list
-
-        is_first_obj = True
-        save_image = False
-
-        # saved_count["stream_{}".format(frame_meta.pad_index)] = 0
-        
-        
-
-        # print("l_obj_1", l_obj)
-        while l_obj is not None:
-            try:
-                # Casting l_obj.data to pyds.NvDsObjectMeta
-                obj_meta = pyds.NvDsObjectMeta.cast(l_obj.data)
-            except StopIteration:
-                break
-
-            
-            # ttkv_queue.append(obj_meta_list.class_id)
-            ttkv_queue.append(obj_meta.class_id)
-
-            frequency = Counter(ttkv_queue)
-
-            non_zero_frequencies = [count for value, count in frequency.items() if value != 7]
-            highest_frequency = max(non_zero_frequencies, default=0)
-
-            if len(ttkv_queue) > 7:
-                popped = ttkv_queue.popleft()
-            
-            if (highest_frequency >= 4): 
-                forward_count["show_rate"] = 1
-            else:
-                forward_count["show_rate"] = 122523452343
-            
-
-            obj_meta.rect_params.border_color.red = 0.0
-            obj_meta.rect_params.border_color.green = 0.0
-            obj_meta.rect_params.border_color.blue = 0.0
-            obj_meta.rect_params.border_color.alpha = 0.0
-
-            # mask_data
-            mask_meta = obj_meta.mask_params
-
-            #position_labels
-            array_mask = mask_meta.get_mask_array()
-            array_mask = array_mask.reshape(480, 480)    
-            array_mask = sigmoid(array_mask)
-            threshold = 0.5
-
-            mask_gray_scale = (array_mask > threshold).astype(float) * 255
-            mask_gray_scale = mask_gray_scale.astype(np.uint8)
-            mask_gray_scale = binary_fill_holes(mask_gray_scale).astype(np.uint8) * 255
-            mask_image = Image.fromarray(mask_gray_scale)
-            
-
-            array_mask = (array_mask > threshold).astype(float) * 1
-            mask = array_mask >= 1
-            indices = np.argwhere(mask)
-
-
-
-            label_list = ['Niêm mạc xung huyết', 'Có mảng sắc tố đen', 'Hẹp lòng phế quản', 'Cựa phế quản phù nề', 'Khối u khí phế quản', 'Tăng sinh mạch', 'Khối u khí phế quản', 'N/A']
-
-            # print("Vocal cords", forward_count["Vocal cords"])
-            # print("Trachea", forward_count["Trachea"])
-            # with open('/opt/nvidia/deepstream/deepstream-7.0/sources/apps/sample_apps/Deepstream/deepstream-esfpnet-rtsp-out/labels_TTKV.txt', "a") as file:
-            #     file.write(" ".join(map(str, label_list[obj_meta.class_id])) + "\n")
-            # if obj_meta.class_id == 8:
-            #     print("obj_meta.class_id ttkv", obj_meta.class_id)
-
-            if (indices.size > 0) and (obj_meta.class_id != 7) and (forward_count["forward_bool"] >= 1) and (saved_count["stream_0"] % int(forward_count["show_rate"])) == 0 :
-                #change color
-                obj_meta.rect_params.border_color.red = 0.0
-                obj_meta.rect_params.border_color.green = 1.0
-                obj_meta.rect_params.border_color.blue = 1.0
-                obj_meta.rect_params.border_color.alpha = 0.0
-                
-                y_offset, x_offset = indices.min(axis=0)
-                x_offset = x_offset * 790 / 480
-                y_offset = y_offset * 790 / 480
-
-                display_meta=pyds.nvds_acquire_display_meta_from_pool(batch_meta)
-                display_meta.num_labels = 1
-                py_nvosd_text_params = display_meta.text_params[0]
-
-                label_list = ['Niêm mạc xung huyết', 'Có mảng sắc tố đen', 'Hẹp lòng phế quản', 'Cựa phế quản phù nề', 'Khối u khí phế quản', 'Tăng sinh mạch', 'Khối u khí phế quản', 'Bình thường' 'N/A']
-                # print("class_id", obj_meta.class_id)
-                py_nvosd_text_params.display_text = label_list[obj_meta.class_id]
-                
-                #"Frame Number={} Number of Objects={} Vehicle_count={} Person_count={}".format(frame_number, num_rects, obj_counter[PGIE_CLASS_ID_VEHICLE], obj_counter[PGIE_CLASS_ID_PERSON])
-
-                # Now set the offsets where the string should appear
-                py_nvosd_text_params.x_offset =  x_offset.astype(np.int64)
-                py_nvosd_text_params.y_offset =  y_offset.astype(np.int64)
-
-                # # Font , font-color and font-size
-                py_nvosd_text_params.font_params.font_name = "Serif"
-                py_nvosd_text_params.font_params.font_size = 15
-                # # set(red, green, blue, alpha); set to White
-                py_nvosd_text_params.font_params.font_color.set(1.0, 1.0, 1.0, 1.0)
-
-                # # Text background color
-                py_nvosd_text_params.set_bg_clr = 1
-                # # set(red, green, blue, alpha); set to Black
-                py_nvosd_text_params.text_bg_clr.set(0.0, 0.0, 0.0, 1.0)
-                # # Using pyds.get_string() to get display_text as string
-                pyds.nvds_add_display_meta_to_frame(frame_meta, display_meta)
-
-                img_path = "{}/frame_{}.jpg".format(folder_path, frame_number)
-                mask_image.save(img_path)
-
-                #save images
-                # if is_first_obj:
-                    
-                #     is_first_obj = False
-                #     # Getting Image data using nvbufsurface
-                #     # the input should be address of buffer and batch_id
-                #     n_frame = pyds.get_nvds_buf_surface(hash(gst_buffer), frame_meta.batch_id)
-                    
-                #     # convert python array into numpy array format in the copy mode.
-                #     frame_copy = np.array(n_frame, copy=True, order='C')
-
-                #     # convert the array into cv2 default color format           
-                #     frame_copy = cv2.cvtColor(frame_copy, cv2.COLOR_RGBA2BGRA)
-                #     frame_copy = cv2.resize(frame_copy, (480, 480))
-
-
-                #     if platform_info.is_integrated_gpu():
-                #         # If Jetson, since the buffer is mapped to CPU for retrieval, it must also be unmapped 
-                #         pyds.unmap_nvds_buf_surface(hash(gst_buffer), frame_meta.batch_id) # The unmap call should be made after operations with the original array are complete.
-                #                                                                             #  The original array cannot be accessed after this call.
-
-                # save_image = True
-                
-                #sound when detect
-                # if sound_delay["count"] % 300 == 0:
-                #     detected_sound.play(loops=-1, maxtime=5000)
-                
-                sound_delay["count"] += 1
-            else:
-                
-                min_row, min_col = 0,0
-            #Save the annotated
-            # if saved_count["stream_{}".format(frame_meta.pad_index)] % 30 == 0 :
-                # if is_first_obj:
-                    
-                #     is_first_obj = False
-                #     # Getting Image data using nvbufsurface
-                #     # the input should be address of buffer and batch_id
-                #     n_frame = pyds.get_nvds_buf_surface(hash(gst_buffer), frame_meta.batch_id)
-                    
-                #     # convert python array into numpy array format in the copy mode.
-                #     frame_copy = np.array(n_frame, copy=True, order='C')
-
-                #     # convert the array into cv2 default color format           
-                #     frame_copy = cv2.cvtColor(frame_copy, cv2.COLOR_RGBA2BGRA)
-                #     frame_copy = cv2.resize(frame_copy, (480, 480))
-
-
-                #     if platform_info.is_integrated_gpu():
-                #         # If Jetson, since the buffer is mapped to CPU for retrieval, it must also be unmapped 
-                #         pyds.unmap_nvds_buf_surface(hash(gst_buffer), frame_meta.batch_id) # The unmap call should be made after operations with the original array are complete.
-                #                                                                             #  The original array cannot be accessed after this call.
-
-                # save_image = True
-
-            try: 
-                l_obj=l_obj.next
-                # print("obj_meta.class_id", obj_meta.class_id)
-
-                if forward_count["forward_bool"] < 1:
-                    pyds.nvds_remove_obj_meta_from_frame(frame_meta, obj_meta)
-                elif saved_count["stream_0"] % int(forward_count["show_rate"]) != 0 :
-                    pyds.nvds_remove_obj_meta_from_frame(frame_meta, obj_meta)
-                elif obj_meta.class_id == 7 :
-                    pyds.nvds_remove_obj_meta_from_frame(frame_meta, obj_meta)
-
-            except StopIteration:
-                break
-        
-        # folder_path = 'frames'
-        # if not os.path.exists(folder_path):
-        #     os.makedirs(folder_path)
-            
-        # if save_image:
-        #     img_path = "{}/frame_{}.jpg".format(folder_path, frame_number)
-        #     cv2.imwrite(img_path, frame_copy)
-
-        saved_count["stream_{}".format(frame_meta.pad_index)] += 1
-        # print("stream_index", "stream_{}".format(frame_meta.pad_index))
-        # print("saved_count", saved_count)
-        
-
-
-        try:
-            l_frame=l_frame.next
-        except StopIteration:
-            break
-			
-    return Gst.PadProbeReturn.OK	
-
-def pgie2_src_pad_buffer_probe(pad,info,u_data):
+def sgie_src_pad_buffer_probe(pad,info,u_data):
     frame_number=0
     
     #Intiallizing object counter with 0.
@@ -365,6 +147,15 @@ def pgie2_src_pad_buffer_probe(pad,info,u_data):
             except StopIteration:
                 break
             
+            ### tojson
+            # file_path = '/opt/nvidia/deepstream/deepstream-7.0/sources/apps/sample_apps/Deepstream/deepstream-esfpnet-rtsp-out/frames/transfer.json'
+            # with open(file_path, 'r') as file:
+            #     data = json.load(file)
+
+            # forward_count["forward_bool"] = data["bool"] 
+            ###
+
+
             label_list = ['Vocal cords', 'Main carina', 'Intermediate bronchus', 'Right superior lobar bronchus', 'Right inferior lobar bronchus', 'Right middle lobar bronchus', 'Left inferior lobar bronchus', 'Left superior lobar bronchus', 'Right main bronchus', 'Left main bronchus', 'Trachea', 'N/A']
 
             # print("Vocal cords", forward_count["Vocal cords"])
@@ -372,27 +163,67 @@ def pgie2_src_pad_buffer_probe(pad,info,u_data):
             # with open('/opt/nvidia/deepstream/deepstream-7.0/sources/apps/sample_apps/Deepstream/deepstream-esfpnet-rtsp-out/labels_MGPKV.txt', "a") as file:
             #     file.write(" ".join(map(str, label_list[obj_meta.class_id])) + "\n")
 
-            mgp_queue.append(obj_meta.class_id)
+            print('Trachea in', forward_count["Trachea in"])
+            print('Trachea out', forward_count["Trachea out"])
+            print(forward_count["forward_bool"] )
 
             # if obj_meta.class_id == 0:
             #     forward_count["Vocal cords"] += 1
-            if obj_meta.class_id == 10:
-                forward_count["Trachea"] += 1
+            if forward_count["forward_bool"] == 0:
+                mgp_queue_in.append(obj_meta.class_id)
+                if obj_meta.class_id == 10:
+                    forward_count["Trachea in"] += 1
 
-            if len(mgp_queue) > 15:
-                popped = mgp_queue.popleft()
+                if len(mgp_queue_in) > 100:
+                    popped = mgp_queue_in.popleft()
+                
+                    # if popped == 0:
+                    #     forward_count["Vocal cords"] -= 1
+                    if popped == 10:
+                        forward_count["Trachea in"] -= 1
+                
+                # in tang kieu len 80/100
+                # out 10,15/100
+                
+                if forward_count["Trachea in"] >= 80: 
+                    forward_count["forward_bool"] = 1
+                    forward_count["Trachea in"] = 0
+                    mgp_queue_in.clear()
+            elif forward_count["forward_bool"] == 1:
+                mgp_queue_out.append(obj_meta.class_id)
+                if obj_meta.class_id == 10:
+                    forward_count["Trachea out"] += 1
 
-                # if popped == 0:
-                #     forward_count["Vocal cords"] -= 1
-                if popped == 10:
-                    forward_count["Trachea"] -= 1
-            
-            if forward_count["Trachea"] >= 10: 
-                forward_count["forward_bool"] = 1
+                if len(mgp_queue_out) > 30:
+                    popped = mgp_queue_out.popleft()
+
+                    # if popped == 0:
+                    #     forward_count["Vocal cords"] -= 1
+                    if popped == 10:
+                        forward_count["Trachea out"] -= 1
+                
+                # in tang kieu len 80/100
+                # out 10,15/100
+                
+                if forward_count["Trachea out"] >= 10: 
+                    forward_count["forward_bool"] = 0
+                    forward_count["Trachea out"] = 0
+                    mgp_queue_out.clear()
+
+                ### tojson
+                # file_path = '/opt/nvidia/deepstream/deepstream-7.0/sources/apps/sample_apps/Deepstream/deepstream-esfpnet-rtsp-out/frames/transfer.json'
+                # with open(file_path, 'r') as file:
+                #     data = json.load(file)
+
+                # data["bool"] = forward_count["forward_bool"]
+
+                # with open(file_path, 'w', encoding='utf-8') as json_file:
+                #     json.dump(data, json_file, ensure_ascii=False, indent=4)
+                ###
 
             # print("Vocal cords", forward_count["Vocal cords"])
             # print("Trachea", forward_count["Trachea"])
-            # print("mgp_queue", mgp_queue)
+            # print("mgp_queue_in", mgp_queue_in)
             # print("forward_bool", forward_count["forward_bool"])
 
             try: 
@@ -403,6 +234,392 @@ def pgie2_src_pad_buffer_probe(pad,info,u_data):
 
             # print("obj_meta.class_id mgp", obj_meta.class_id)
         
+
+        try:
+            l_frame=l_frame.next
+        except StopIteration:
+            break
+			
+    return Gst.PadProbeReturn.OK
+
+def bubbles_gie_src_pad_buffer_probe(pad,info,u_data):
+    frame_number=0
+    
+    #Intiallizing object counter with 0.
+    obj_counter = {
+        PGIE_CLASS_ID_VEHICLE:0,
+        PGIE_CLASS_ID_PERSON:0,
+        PGIE_CLASS_ID_BICYCLE:0,
+        PGIE_CLASS_ID_ROADSIGN:0
+    }
+    num_rects=0
+
+    relative_path = '/'.join(stream_path.split('/')[-3:-1]) 
+    bubble_mask_path = f'/opt/nvidia/deepstream/deepstream-7.0/sources/apps/sample_apps/Deepstream/deepstream-esfpnet-rtsp-out/frames/BV Bạch Mai_infered/{relative_path}/bubble_mask_all'
+    if not os.path.exists(bubble_mask_path):
+        os.makedirs(bubble_mask_path)
+
+    gst_buffer = info.get_buffer()
+    if not gst_buffer:
+        print("Unable to get GstBuffer ")
+        return
+
+    batch_meta = pyds.gst_buffer_get_nvds_batch_meta(hash(gst_buffer))
+    l_frame = batch_meta.frame_meta_list
+
+
+    while l_frame is not None:
+        try:
+            frame_meta = pyds.NvDsFrameMeta.cast(l_frame.data)
+        except StopIteration:
+            break
+
+        frame_number=frame_meta.frame_num
+        num_rects = frame_meta.num_obj_meta
+        l_obj=frame_meta.obj_meta_list
+
+        while l_obj is not None:
+            try:
+                # Casting l_obj.data to pyds.NvDsObjectMeta
+                obj_meta = pyds.NvDsObjectMeta.cast(l_obj.data)
+            except StopIteration:
+                break
+
+            obj_meta.rect_params.border_color.red = 0.0
+            obj_meta.rect_params.border_color.green = 0.0
+            obj_meta.rect_params.border_color.blue = 0.0
+            obj_meta.rect_params.border_color.alpha = 0.0
+
+            mask_meta = obj_meta.mask_params
+
+            #position_labels
+            array_mask = mask_meta.get_mask_array()
+            array_mask = array_mask.reshape(480, 480)    
+            array_mask = sigmoid(array_mask)
+            threshold = 0.5
+
+            mask_gray_scale = (array_mask > threshold).astype(float) * 255
+            mask_gray_scale = mask_gray_scale.astype(np.uint8)
+            mask_gray_scale = binary_fill_holes(mask_gray_scale).astype(np.uint8) * 255
+            mask_image = Image.fromarray(mask_gray_scale)
+
+            array_mask = (array_mask > threshold).astype(float) * 1
+            forward_count["bubble_mask"] = array_mask
+            
+            mask = array_mask >= 1
+            indices = np.argwhere(mask)
+
+            bubble_img_path = "{}/frame_{}.jpg".format(bubble_mask_path, frame_number)
+            mask_image.save(bubble_img_path)
+
+            # if (indices.size > 0) and (obj_meta.class_id != 0) and (forward_count["forward_bool"] >= 1) and (saved_count["stream_0"] % int(forward_count["show_rate"])) == 0 and ((iou <= 0.2)) :
+            #     #change color
+            #     obj_meta.rect_params.border_color.red = 0.0
+            #     obj_meta.rect_params.border_color.green = 1.0
+            #     obj_meta.rect_params.border_color.blue = 1.0
+            #     obj_meta.rect_params.border_color.alpha = 0.0
+                
+            #     y_offset, x_offset = indices.min(axis=0)
+            #     x_offset = x_offset * 790 / 480
+            #     y_offset = y_offset * 790 / 480
+
+            #     display_meta=pyds.nvds_acquire_display_meta_from_pool(batch_meta)
+            #     display_meta.num_labels = 1
+            #     py_nvosd_text_params = display_meta.text_params[0]
+
+            #     # label_list = ['Niêm mạc xung huyết', 'Có mảng sắc tố đen', 'Hẹp lòng phế quản', 'Cựa phế quản phù nề', 'Niêm mạc thâm nhiễm', 'Tăng sinh mạch', 'Khối u khí phế quản', 'Bình thường' 'N/A']
+            #     label_list = ['Bubbles', "No object"]
+
+            #     py_nvosd_text_params.display_text = label_list[obj_meta.class_id]
+                
+            #     # Now set the offsets where the string should appear
+            #     py_nvosd_text_params.x_offset =  x_offset.astype(np.int64)
+            #     py_nvosd_text_params.y_offset =  y_offset.astype(np.int64)
+
+            #     # # Font , font-color and font-size
+            #     py_nvosd_text_params.font_params.font_name = "Serif"
+            #     py_nvosd_text_params.font_params.font_size = 15
+            #     # # set(red, green, blue, alpha); set to White
+            #     py_nvosd_text_params.font_params.font_color.set(1.0, 1.0, 1.0, 1.0)
+
+            #     # # Text background color
+            #     py_nvosd_text_params.set_bg_clr = 1
+            #     # # set(red, green, blue, alpha); set to Black
+            #     py_nvosd_text_params.text_bg_clr.set(0.0, 0.0, 0.0, 1.0)
+            #     # # Using pyds.get_string() to get display_text as string
+            #     pyds.nvds_add_display_meta_to_frame(frame_meta, display_meta)
+
+            
+
+            try: 
+                l_obj=l_obj.next
+                pyds.nvds_remove_obj_meta_from_frame(frame_meta, obj_meta)
+            except StopIteration:
+                break
+
+            # print("obj_meta.class_id mgp", obj_meta.class_id)
+        
+
+        try:
+            l_frame=l_frame.next
+        except StopIteration:
+            break
+			
+    return Gst.PadProbeReturn.OK
+
+def pgie_src_pad_buffer_probe(pad,info,u_data):
+    frame_number=0
+    #Intiallizing object counter with 0.
+    obj_counter = {
+        PGIE_CLASS_ID_VEHICLE:0,
+        PGIE_CLASS_ID_PERSON:0,
+        PGIE_CLASS_ID_BICYCLE:0,
+        PGIE_CLASS_ID_ROADSIGN:0
+    }
+    num_rects=0
+
+    relative_path = '/'.join(stream_path.split('/')[-3:-1]) 
+    folder_path = f'/opt/nvidia/deepstream/deepstream-7.0/sources/apps/sample_apps/Deepstream/deepstream-esfpnet-rtsp-out/frames/BV Bạch Mai_infered/{relative_path}/masks'
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path)
+
+    folder_name = relative_path
+    folder_path = f'/opt/nvidia/deepstream/deepstream-7.0/sources/apps/sample_apps/Deepstream/deepstream-esfpnet-rtsp-out/frames/BV Bạch Mai_infered/{folder_name}/mask'
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path)
+
+    label_path = f'/opt/nvidia/deepstream/deepstream-7.0/sources/apps/sample_apps/Deepstream/deepstream-esfpnet-rtsp-out/frames/BV Bạch Mai_infered/{folder_name}/label'
+    if not os.path.exists(label_path):
+        os.makedirs(label_path)
+
+    bubble_mask_path = f'/opt/nvidia/deepstream/deepstream-7.0/sources/apps/sample_apps/Deepstream/deepstream-esfpnet-rtsp-out/frames/BV Bạch Mai_infered/{folder_name}/bubble_mask_all'
+    if not os.path.exists(bubble_mask_path):
+        os.makedirs(bubble_mask_path)
+    
+    iou_path = f'/opt/nvidia/deepstream/deepstream-7.0/sources/apps/sample_apps/Deepstream/deepstream-esfpnet-rtsp-out/frames/BV Bạch Mai_infered/{folder_name}/iou'
+    if not os.path.exists(iou_path):
+        os.makedirs(iou_path)
+
+    gst_buffer = info.get_buffer()
+    if not gst_buffer:
+        print("Unable to get GstBuffer ")
+        return
+
+    batch_meta = pyds.gst_buffer_get_nvds_batch_meta(hash(gst_buffer))
+    l_frame = batch_meta.frame_meta_list
+
+
+    while l_frame is not None:
+        try:
+            frame_meta = pyds.NvDsFrameMeta.cast(l_frame.data)
+        except StopIteration:
+            break
+        
+        
+
+        frame_number=frame_meta.frame_num
+        num_rects = frame_meta.num_obj_meta
+        l_obj=frame_meta.obj_meta_list
+
+        is_first_obj = True
+        save_image = False
+        
+
+        # saved_count["stream_{}".format(frame_meta.pad_index)] = 0
+        if forward_count["time_skip"] == 150:
+            forward_count["show_image"] = 0
+            forward_count["time_skip"] = 0
+            forward_count["bool_image"] = 0
+
+        if forward_count["bool_image"] == 1:
+            forward_count["time_skip"] += 1
+            forward_count["show_image"] = 0
+
+        # print("l_obj_1", l_obj)
+        while l_obj is not None:
+            try:
+                # Casting l_obj.data to pyds.NvDsObjectMeta
+                obj_meta = pyds.NvDsObjectMeta.cast(l_obj.data)
+            except StopIteration:
+                break
+
+            # print(obj_meta.class_id, obj_meta.confidence)
+            
+            ttkv_queue.append(obj_meta.class_id)
+            # print("ttkv_queue", ttkv_queue)
+            frequency = Counter(ttkv_queue)
+
+            non_zero_frequencies = [count for value, count in frequency.items() if value != 0]
+            highest_frequency = max(non_zero_frequencies, default=0)
+
+            if len(ttkv_queue) > 30: 
+                popped = ttkv_queue.popleft()
+            
+            if (highest_frequency >= 20): 
+                forward_count["show_rate"] = 1
+            else:
+                forward_count["show_rate"] = 122523452343
+            
+
+            obj_meta.rect_params.border_color.red = 0.0
+            obj_meta.rect_params.border_color.green = 0.0
+            obj_meta.rect_params.border_color.blue = 0.0
+            obj_meta.rect_params.border_color.alpha = 0.0
+
+            # mask_data
+            mask_meta = obj_meta.mask_params
+
+            #position_labels
+            array_mask = mask_meta.get_mask_array()
+            array_mask = array_mask.reshape(480, 480)    
+            array_mask = sigmoid(array_mask)
+            threshold = 0.5
+
+            mask_gray_scale = (array_mask > threshold).astype(float) * 255
+            mask_gray_scale = mask_gray_scale.astype(np.uint8)
+            mask_gray_scale = binary_fill_holes(mask_gray_scale).astype(np.uint8) * 255
+            mask_image = Image.fromarray(mask_gray_scale)
+            
+            array_mask = (array_mask > threshold).astype(float) * 1
+            
+            mask = array_mask >= 1
+            indices = np.argwhere(mask)
+
+            # bubble_mask_gray_scale = forward_count["bubble_mask"] * 255
+            # bubble_mask_gray_scale = bubble_mask_gray_scale.astype(np.uint8)
+            # bubble_mask_gray_scale = binary_fill_holes(bubble_mask_gray_scale).astype(np.uint8) * 255
+            # bubble_mask_image = Image.fromarray(bubble_mask_gray_scale)
+            bubble_img_path = "{}/frame_{}.jpg".format(bubble_mask_path, frame_number)
+            bubble_mask_image = Image.open(bubble_img_path)
+
+            # Calculate IoU
+            # intersection = np.logical_and(array_mask, forward_count["bubble_mask"]).sum()
+            # union = np.logical_or(array_mask, forward_count["bubble_mask"]).sum()
+            # iou = round(intersection / union, 5) if union > 0 else 0
+
+            mask_array = np.array(mask_image)
+            bubble_mask_array = np.array(bubble_mask_image)
+
+            # Ensure masks are binarized (0 or 255)
+            mask_array = (mask_array > 0).astype(np.uint8)
+            bubble_mask_array = (bubble_mask_array > 0).astype(np.uint8)
+
+            # Calculate intersection and union
+            intersection = np.logical_and(mask_array, bubble_mask_array).sum()
+            union = np.logical_or(mask_array, bubble_mask_array).sum()
+
+            # Calculate IoU
+            iou = round(intersection / union, 5) if union > 0 else 0
+
+            # if frame_number == 531:
+                # print(type(array_mask), array_mask.shape, array_mask)
+                # print(type(forward_count["bubble_mask"]) , forward_count["bubble_mask"].shape, forward_count["bubble_mask"])
+                # np.savetxt('array_mask.txt', array_mask)
+                # np.savetxt('bubble_mask.txt', forward_count["bubble_mask"])
+                # print(intersection)
+                # print(union)
+                # print(iou)
+
+
+            if (indices.size > 0) and (obj_meta.class_id != 0) and (forward_count["forward_bool"] >= 1) and (saved_count["stream_0"] % int(forward_count["show_rate"])) == 0 and ((iou <= 0.1)):
+                #change color
+                obj_meta.rect_params.border_color.red = 0.0
+                obj_meta.rect_params.border_color.green = 1.0
+                obj_meta.rect_params.border_color.blue = 1.0
+                obj_meta.rect_params.border_color.alpha = 0.0
+                
+                y_offset, x_offset = indices.min(axis=0)
+                x_offset = x_offset * 790 / 480
+                y_offset = y_offset * 790 / 480
+
+                display_meta=pyds.nvds_acquire_display_meta_from_pool(batch_meta)
+                display_meta.num_labels = 1
+                py_nvosd_text_params = display_meta.text_params[0]
+
+                # label_list = ['Niêm mạc xung huyết', 'Có mảng sắc tố đen', 'Hẹp lòng phế quản', 'Cựa phế quản phù nề', 'Niêm mạc thâm nhiễm', 'Tăng sinh mạch', 'Khối u khí phế quản', 'Bình thường' 'N/A']
+                label_list = ['Binh thuong', 'Khoi u']
+
+                py_nvosd_text_params.display_text = label_list[obj_meta.class_id]
+                
+                # Now set the offsets where the string should appear
+                py_nvosd_text_params.x_offset =  x_offset.astype(np.int64)
+                py_nvosd_text_params.y_offset =  y_offset.astype(np.int64)
+
+                # # Font , font-color and font-size
+                py_nvosd_text_params.font_params.font_name = "Serif"
+                py_nvosd_text_params.font_params.font_size = 15
+                # # set(red, green, blue, alpha); set to White
+                py_nvosd_text_params.font_params.font_color.set(1.0, 1.0, 1.0, 1.0)
+
+                # # Text background color
+                py_nvosd_text_params.set_bg_clr = 1
+                # # set(red, green, blue, alpha); set to Black
+                py_nvosd_text_params.text_bg_clr.set(0.0, 0.0, 0.0, 1.0)
+                # # Using pyds.get_string() to get display_text as string
+                pyds.nvds_add_display_meta_to_frame(frame_meta, display_meta)
+
+                if forward_count["show_image"] == 0 and forward_count["time_skip"] == 0:
+                    forward_count["show_image"] = 1
+                    forward_count["bool_image"] = 1
+
+                if forward_count["show_image"] == 1 and forward_count["time_skip"] == 0:
+                    img_path = "{}/frame_{}.jpg".format(folder_path, frame_number)
+                    mask_image.save(img_path)
+
+                    # bubble_img_path = "{}/frame_{}.jpg".format(bubble_mask_path, frame_number)
+                    # bubble_mask_image.save(bubble_img_path)
+
+                    txt_label = "{}/frame_{}.txt".format(label_path, frame_number)
+                    with open(txt_label, "w") as f:
+                        f.write(label_list[obj_meta.class_id] + "\n")
+
+                    txt_iou = "{}/frame_{}.txt".format(iou_path, frame_number)
+                    with open(txt_iou, "w") as f:
+                        f.write(str(iou) + "\n")
+
+
+                
+                
+                sound_delay["count"] += 1
+            else:
+                
+                min_row, min_col = 0,0
+            
+            try: 
+                l_obj=l_obj.next
+                # print("obj_meta.class_id", obj_meta.class_id)
+
+                # pyds.nvds_remove_obj_meta_from_frame(frame_meta, obj_meta)
+
+                if forward_count["forward_bool"] < 1:
+                    pyds.nvds_remove_obj_meta_from_frame(frame_meta, obj_meta)
+                elif saved_count["stream_0"] % int(forward_count["show_rate"]) != 0 :
+                    pyds.nvds_remove_obj_meta_from_frame(frame_meta, obj_meta)
+                elif obj_meta.class_id == 0 :
+                    pyds.nvds_remove_obj_meta_from_frame(frame_meta, obj_meta)
+
+            except StopIteration:
+                break
+        
+        # folder_path = 'frames'
+        # if not os.path.exists(folder_path):
+        #     os.makedirs(folder_path)
+            
+        # if save_image:
+        #     img_path = "{}/frame_{}.jpg".format(folder_path, frame_number)
+        #     cv2.imwrite(img_path, frame_copy)
+        
+
+        saved_count["stream_{}".format(frame_meta.pad_index)] += 1
+        # if forward_count["show_image"] == 1 and forward_count["time_skip"] == 0:
+            # print("show_image")
+
+        # print("show_image", forward_count["show_image"])
+        # print("time_skip", forward_count["time_skip"])
+        # print("stream_index", "stream_{}".format(frame_meta.pad_index))
+        # print("saved_count", saved_count)
+        
+
 
         try:
             l_frame=l_frame.next
@@ -422,9 +639,14 @@ def osd_sink_pad_buffer_probe(pad,info,u_data):
     }
     num_rects=0
 
-    folder_name = stream_path.split('/')[0]
-    folder_path = f'/opt/nvidia/deepstream/deepstream-7.0/sources/apps/sample_apps/Deepstream/deepstream-esfpnet-rtsp-out/frames/{folder_name}/imgs'
-    # print(folder_path)
+
+    relative_path = '/'.join(stream_path.split('/')[-3:-1]) 
+    # folder_path = f'/opt/nvidia/deepstream/deepstream-7.0/sources/apps/sample_apps/Deepstream/deepstream-esfpnet-rtsp-out/frames/BV Bạch Mai_infered/{relative_path}/imgs'
+    # if not os.path.exists(folder_path):
+    #     os.makedirs(folder_path)
+
+    folder_name = relative_path
+    folder_path = f'/opt/nvidia/deepstream/deepstream-7.0/sources/apps/sample_apps/Deepstream/deepstream-esfpnet-rtsp-out/frames/BV Bạch Mai_infered/{folder_name}/imgs'
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
 
@@ -452,9 +674,6 @@ def osd_sink_pad_buffer_probe(pad,info,u_data):
 
         # saved_count["stream_{}".format(frame_meta.pad_index)] = 0
         
-        
-
-        # print("l_obj_1", l_obj)
         while l_obj is not None:
             try:
                 # Casting l_obj.data to pyds.NvDsObjectMeta
@@ -462,6 +681,7 @@ def osd_sink_pad_buffer_probe(pad,info,u_data):
             except StopIteration:
                 break
 
+            
             # mask_data
             mask_meta = obj_meta.mask_params
 
@@ -473,12 +693,14 @@ def osd_sink_pad_buffer_probe(pad,info,u_data):
             array_mask = (array_mask > threshold).astype(float) * 1
             mask = array_mask >= 1
             indices = np.argwhere(mask)
+
+            intersection = np.logical_and(array_mask, forward_count["bubble_mask"]).sum()
+            union = np.logical_or(array_mask, forward_count["bubble_mask"]).sum()
+            iou = intersection / union if union > 0 else 0
             
-            # print('(indices.size > 0)', (indices.size > 0))
-            # print('obj_meta.class_id != 7', obj_meta.class_id != 7)
-            # print('forward_count["forward_bool"] >= 1', forward_count["forward_bool"] >= 1)
-            # print(int(forward_count["show_rate"]))
-            if (indices.size > 0) and (obj_meta.class_id != 7) and (forward_count["forward_bool"] >= 1) and (saved_count["stream_0"] % int(forward_count["show_rate"])) == 0 :
+
+
+            if (indices.size > 0) and (obj_meta.class_id != 0) and (forward_count["forward_bool"] >= 1) and (saved_count["stream_0"] % int(forward_count["show_rate"])) == 0 and ((iou <= 0.1)) :
                 
                 #save images
                 if is_first_obj:
@@ -501,9 +723,15 @@ def osd_sink_pad_buffer_probe(pad,info,u_data):
                         pyds.unmap_nvds_buf_surface(hash(gst_buffer), frame_meta.batch_id) # The unmap call should be made after operations with the original array are complete.
                                                                                             #  The original array cannot be accessed after this call.
 
-                    img_path = "{}/frame_{}.jpg".format(folder_path, frame_number)
-                    # print(img_path)
-                    cv2.imwrite(img_path, frame_copy)
+                    if forward_count["show_image"] == 1 and forward_count["time_skip"] == 0:
+                        img_path = "{}/frame_{}.jpg".format(folder_path, frame_number)
+                        cv2.imwrite(img_path, frame_copy)
+                        # txt_path = "{}/frame_{}.txt".format(folder_path, frame_number)
+                        # np.savetxt(txt_path, frame_copy.flatten(), fmt='%d')
+                        # frame_list = frame_copy.tolist()
+                        # json_path = "{}/frame_{}.json".format(folder_path, frame_number)
+                        # with open(json_path, 'w') as json_file:
+                        #     json.dump(frame_list, json_file)
                 # save_image = True
                 
             else:
@@ -634,9 +862,13 @@ def main(args):
     if not pgie:
         sys.stderr.write(" Unable to create pgie \n")
 
-    pgie2 = Gst.ElementFactory.make("nvinfer", "secondary-inference")
-    if not pgie2:
-        sys.stderr.write(" Unable to create pgie2 \n")
+    sgie = Gst.ElementFactory.make("nvinfer", "secondary-inference")
+    if not sgie:
+        sys.stderr.write(" Unable to create sgie \n")
+
+    bubbles_gie = Gst.ElementFactory.make("nvinfer", "tertiary-inference")
+    if not bubbles_gie:
+        sys.stderr.write(" Unable to create bubbles_gie \n")
     
     
     # Use convertor to convert from NV12 to RGBA as required by nvosd
@@ -731,9 +963,10 @@ def main(args):
     # streammux.set_property('nvbuf-memory-type', 3)
     # pgie.set_property('config-file-path', "config_infer_primary_esfpnet_single.txt")
     # pgie.set_property('config-file-path', "config_infer_primary_esfpnet_joint.txt")
-    pgie.set_property('config-file-path', "/opt/nvidia/deepstream/deepstream-7.0/sources/apps/sample_apps/Deepstream/deepstream-esfpnet-rtsp-out/config_infer_primary_esfpnet_joint.txt")
-    pgie2.set_property('config-file-path', "/opt/nvidia/deepstream/deepstream-7.0/sources/apps/sample_apps/Deepstream/deepstream-esfpnet-rtsp-out/config_infer_primary_esfpnet_joint_mgp.txt")
-
+    pgie.set_property('config-file-path', "/opt/nvidia/deepstream/deepstream-7.0/sources/apps/sample_apps/Deepstream/deepstream-esfpnet-rtsp-out/config_infer_primary_esfpnet_joint_khoiu.txt")
+    sgie.set_property('config-file-path', "/opt/nvidia/deepstream/deepstream-7.0/sources/apps/sample_apps/Deepstream/deepstream-esfpnet-rtsp-out/config_infer_primary_esfpnet_joint_mgp.txt")
+    bubbles_gie.set_property('config-file-path', "/opt/nvidia/deepstream/deepstream-7.0/sources/apps/sample_apps/Deepstream/deepstream-esfpnet-rtsp-out/config_infer_bubbles_detection.txt")
+    
     # mp4
     ##############
     nvvidconv_mp4= Gst.ElementFactory.make("nvvideoconvert", "convertor_mp4")
@@ -760,12 +993,19 @@ def main(args):
     if not container:
         sys.stderr.write(" Unable to create code parser \n")
 
+    folder_name = '/'.join(stream_path.split('/')[-3:]).replace('.h264', '')
+    folder_mp4 = f'/opt/nvidia/deepstream/deepstream-7.0/sources/apps/sample_apps/Deepstream/deepstream-esfpnet-rtsp-out/frames/BV Bạch Mai_infered/{folder_name}.mp4'
+    relative_path = '/'.join(stream_path.split('/')[-3:-1]) 
+    relative_mp4 = f'/opt/nvidia/deepstream/deepstream-7.0/sources/apps/sample_apps/Deepstream/deepstream-esfpnet-rtsp-out/frames/BV Bạch Mai_infered/{relative_path}'
+    if not os.path.exists(relative_mp4):
+        os.makedirs(relative_mp4)
+
     file_sink = Gst.ElementFactory.make("filesink", "filesink")
     if not file_sink:
         sys.stderr.write(" Unable to create file sink \n")
-    file_sink.set_property("location", "./out_usb_1.mp4")
+    file_sink.set_property("location", folder_mp4)
     file_sink.set_property("sync", 0)
-    ##############
+    ##############/opt/nvidia/deepstream/deepstream-7.0/sources/apps/sample_apps/Deepstream/deepstream-esfpnet-rtsp-out/frames/BV Bạch Mai_infered/CaBenh/BU0081
 
 
     ##############
@@ -792,20 +1032,21 @@ def main(args):
     
     pipeline.add(streammux)
     pipeline.add(pgie)
-    pipeline.add(pgie2)
+    pipeline.add(sgie)
+    pipeline.add(bubbles_gie)
     pipeline.add(nvvidconv)
     pipeline.add(nvosd)
-    # pipeline.add(tee)
-    # pipeline.add(queue1)
-    # pipeline.add(queue2)
+    pipeline.add(tee)
+    pipeline.add(queue1)
+    pipeline.add(queue2)
 
     #mp4
-    # pipeline.add(nvvidconv_mp4)
-    # pipeline.add(capsfilter)
-    # pipeline.add(encoder_mp4)
-    # pipeline.add(codeparser)
-    # pipeline.add(container)
-    # pipeline.add(file_sink)
+    pipeline.add(nvvidconv_mp4)
+    pipeline.add(capsfilter)
+    pipeline.add(encoder_mp4)
+    pipeline.add(codeparser)
+    pipeline.add(container)
+    pipeline.add(file_sink)
 
     #rtsp
     pipeline.add(nvvidconv_postosd)
@@ -832,25 +1073,36 @@ def main(args):
     
     
     srcpad.link(sinkpad)
-    streammux.link(pgie2)
-    pgie2.link(pgie)
+    streammux.link(sgie)
+    sgie.link(bubbles_gie)
+    bubbles_gie.link(pgie)
     pgie.link(nvvidconv)
+    # bubbles_gie.link(nvvidconv)
     nvvidconv.link(filter1)
     filter1.link(nvvidconv_frames)
     nvvidconv_frames.link(nvosd)
 
+    # srcpad.link(sinkpad)
+    # streammux.link(bubbles_gie)
+    # bubbles_gie.link(sgie)
+    # sgie.link(pgie)
+    # pgie.link(nvvidconv)
+    # nvvidconv.link(filter1)
+    # filter1.link(nvvidconv_frames)
+    # nvvidconv_frames.link(nvosd)
 
-    # nvosd.link(tee)
 
-    # queue1.link(nvvidconv_mp4)
-    # nvvidconv_mp4.link(capsfilter)
-    # capsfilter.link(encoder_mp4)
-    # encoder_mp4.link(codeparser)
-    # codeparser.link(container)
-    # container.link(file_sink)
+    nvosd.link(tee)
 
-    # queue2.link(nvvidconv_postosd)
-    nvosd.link(nvvidconv_postosd)
+    queue1.link(nvvidconv_mp4)
+    nvvidconv_mp4.link(capsfilter)
+    capsfilter.link(encoder_mp4)
+    encoder_mp4.link(codeparser)
+    codeparser.link(container)
+    container.link(file_sink)
+
+    queue2.link(nvvidconv_postosd)
+    # nvosd.link(nvvidconv_postosd)
     nvvidconv_postosd.link(caps)
     caps.link(encoder)
     encoder.link(rtppay)
@@ -858,15 +1110,15 @@ def main(args):
 
     # queue3.link()
 
-    # sink_pad = queue1.get_static_pad("sink")
-    # tee_mp4 = tee.request_pad_simple('src_%u')
-    # tee_rtsp = tee.request_pad_simple("src_%u")
-    # # tee_frames = tee.request_pad_simple("src_%u")
-    # if not tee_mp4 or not tee_rtsp :
-    #     sys.stderr.write("Unable to get request pads\n")
-    # tee_mp4.link(sink_pad)
-    # sink_pad = queue2.get_static_pad("sink")
-    # tee_rtsp.link(sink_pad)
+    sink_pad = queue1.get_static_pad("sink")
+    tee_mp4 = tee.request_pad_simple('src_%u')
+    tee_rtsp = tee.request_pad_simple("src_%u")
+    # tee_frames = tee.request_pad_simple("src_%u")
+    if not tee_mp4 or not tee_rtsp :
+        sys.stderr.write("Unable to get request pads\n")
+    tee_mp4.link(sink_pad)
+    sink_pad = queue2.get_static_pad("sink")
+    tee_rtsp.link(sink_pad)
     # sink_pad = queue3.get_static_pad("sink")
     # tee_frames.link(sink_pad)
 
@@ -903,15 +1155,20 @@ def main(args):
     
     # osdsinkpad.add_probe(Gst.PadProbeType.BUFFER, osd_sink_pad_buffer_probe, 0)
 
-    pgie_src_pad=pgie.get_static_pad("src")
+    pgie_src_pad = pgie.get_static_pad("src")
     if not pgie_src_pad:
         sys.stderr.write(" Unable to get src pad \n")
     pgie_src_pad.add_probe(Gst.PadProbeType.BUFFER, pgie_src_pad_buffer_probe, 0)
 
-    pgie2_src_pad=pgie2.get_static_pad("src")
-    if not pgie2_src_pad:
+    sgie_src_pad = sgie.get_static_pad("src")
+    if not sgie_src_pad:
         sys.stderr.write(" Unable to get src pad \n")
-    pgie2_src_pad.add_probe(Gst.PadProbeType.BUFFER, pgie2_src_pad_buffer_probe, 0)
+    sgie_src_pad.add_probe(Gst.PadProbeType.BUFFER, sgie_src_pad_buffer_probe, 0)
+
+    bubbles_gie_src_pad = bubbles_gie.get_static_pad("src")
+    if not bubbles_gie_src_pad:
+        sys.stderr.write(" Unable to get src pad \n")
+    bubbles_gie_src_pad.add_probe(Gst.PadProbeType.BUFFER, bubbles_gie_src_pad_buffer_probe, 0)
     
     osdsinkpad = nvosd.get_static_pad("sink")
     if not osdsinkpad:
